@@ -47,6 +47,9 @@ COLUMNS = [
     "accel_angle_deg",
     "accel_norm_g",
     "dropped_reads",
+    "roll_axis",
+    "roll_sign",
+    "roll_cal",
     "error_deg",    # PID error term
     "output_deg",   # PID output (servo deflection in degrees)
     "sp_accum",     # SetpointAccum drift
@@ -137,6 +140,9 @@ def main():
                 "accel_angle_deg": f"{float(j.get('accelAngle', 0.0)):.4f}",
                 "accel_norm_g": f"{float(j.get('accelNorm', 0.0)):.4f}",
                 "dropped_reads": j.get("dropped", 0),
+                "roll_axis":    j.get("rollAxis", ""),
+                "roll_sign":    j.get("rollSign", 1),
+                "roll_cal":     j.get("rollCal", False),
                 "error_deg":   f"{err:.4f}",
                 "output_deg":  f"{float(j.get('output', 0.0)):.4f}",
                 "sp_accum":    f"{float(j.get('spAccum', 0.0)):.4f}",

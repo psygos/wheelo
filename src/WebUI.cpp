@@ -270,7 +270,7 @@ hr{border:none;border-top:1px solid var(--border);width:100%;}
 
   <div class="mpu-grid" style="grid-template-columns:repeat(3,1fr);">
     <div class="mpu-cell" style="border-color:#ff9900aa;">
-      <div class="mpu-lbl" style="color:#ff9900;">Angle (Pitch)</div>
+      <div class="mpu-lbl" style="color:#ff9900;">Angle (Roll)</div>
       <div class="mpu-num" id="m-angle" style="color:#ff9900;font-size:28px;">—</div>
       <div class="mpu-unit">deg</div></div>
     <div class="mpu-cell">
@@ -297,6 +297,28 @@ hr{border:none;border-top:1px solid var(--border);width:100%;}
       <div class="mpu-lbl">Dropped I2C</div>
       <div class="mpu-num" id="m-dropped">—</div>
       <div class="mpu-unit">reads</div></div>
+  </div>
+
+  <div class="mpu-grid">
+    <div class="mpu-cell">
+      <div class="mpu-lbl">Roll Axis</div>
+      <div class="mpu-num" id="m-roll-axis">—</div>
+      <div class="mpu-unit">sensor axis</div></div>
+    <div class="mpu-cell">
+      <div class="mpu-lbl">Roll Span</div>
+      <div class="mpu-num" id="m-roll-span">—</div>
+      <div class="mpu-unit">deg</div></div>
+    <div class="mpu-cell">
+      <div class="mpu-lbl">Axis Quality</div>
+      <div class="mpu-num" id="m-roll-quality">—</div>
+      <div class="mpu-unit">ratio</div></div>
+  </div>
+
+  <div class="row">
+    <button id="roll-cal-start" class="prim">Start Roll Cal</button>
+    <button id="roll-cal-save" class="safe">Save Axis</button>
+    <button id="roll-axis-toggle">Axis X/Y</button>
+    <button id="roll-sign-flip">Flip Sign</button>
   </div>
 
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -472,6 +494,11 @@ const mpuStatus=document.getElementById('mpu-status');
 const mpuCalMsg=document.getElementById('mpu-cal-msg');
 const mpuCalBtn=document.getElementById('mpu-cal-btn');
 const vertBanner=document.getElementById('vertical-banner');
+const rollCalStartBtn=document.getElementById('roll-cal-start');
+const rollCalSaveBtn=document.getElementById('roll-cal-save');
+const rollAxisToggleBtn=document.getElementById('roll-axis-toggle');
+const rollSignFlipBtn=document.getElementById('roll-sign-flip');
+let currentRollAxis='X', currentRollSign=1;
 
 async function fetchMpu(){
   try{
@@ -479,12 +506,21 @@ async function fetchMpu(){
     if(!j.ok){mpuStatus.textContent='not found';mpuStatus.style.color='var(--red)';}
     else if(j.cal){mpuStatus.textContent='calibrating…';mpuStatus.style.color='var(--blue)';}
     else{
-      mpuStatus.textContent='live'; mpuStatus.style.color='var(--green)';
+      mpuStatus.textContent=j.rollCal?'roll cal…':'live';
+      mpuStatus.style.color=j.rollCal?'var(--blue)':'var(--green)';
       document.getElementById('m-angle').textContent=j.angle.toFixed(2);
       document.getElementById('m-rate').textContent=j.rate.toFixed(2);
       document.getElementById('m-accel-angle').textContent=j.accelAngle.toFixed(2);
       document.getElementById('m-accel-norm').textContent=j.accelNorm.toFixed(3);
       document.getElementById('m-dropped').textContent=j.dropped;
+      currentRollAxis=j.rollAxis||'X';
+      currentRollSign=j.rollSign<0?-1:1;
+      document.getElementById('m-roll-axis').textContent=currentRollAxis+(currentRollSign<0?'-':'+');
+      document.getElementById('m-roll-span').textContent=j.rollCalSpan.toFixed(1);
+      document.getElementById('m-roll-quality').textContent=j.rollCalQuality.toFixed(2);
+      rollCalStartBtn.textContent=j.rollCal?'Recording':'Start Roll Cal';
+      rollCalStartBtn.disabled=!!j.rollCal;
+      rollCalSaveBtn.disabled=!j.rollCal;
       vertBanner.style.display=j.vertical?'block':'none';
       gyroGraph.push([j.angle,j.rate]);
     }
@@ -507,6 +543,26 @@ async function runCal(url,msg,successMsg){
 }
 mpuCalBtn.addEventListener('click',()=>
   runCal('/mpu/calibrate','Bias cal — keep flat & still (~2 s)…','Bias saved ✓'));
+rollCalStartBtn.addEventListener('click',async()=>{
+  try{await fetch('/mpu/rollcal/start');toast('Roll cal recording');}
+  catch(e){toast('Failed');}
+});
+rollCalSaveBtn.addEventListener('click',async()=>{
+  try{
+    const r=await fetch('/mpu/rollcal/finish'),j=await r.json();
+    toast(j.applied?'Roll axis saved: '+j.axis:'Roll farther and retry');
+  }catch(e){toast('Failed');}
+});
+rollAxisToggleBtn.addEventListener('click',async()=>{
+  const next=currentRollAxis==='Y'?'X':'Y';
+  try{await fetch('/mpu/rollaxis?axis='+next+'&sign='+currentRollSign);toast('Roll axis '+next);}
+  catch(e){toast('Failed');}
+});
+rollSignFlipBtn.addEventListener('click',async()=>{
+  const next=currentRollSign<0?1:-1;
+  try{await fetch('/mpu/rollaxis?axis='+currentRollAxis+'&sign='+next);toast('Roll sign flipped');}
+  catch(e){toast('Failed');}
+});
 document.getElementById('reset-angles-btn').addEventListener('click',async()=>{
   try{await fetch('/mpu/resetangles');toast('Angle zeroed');}catch(e){}
 });
@@ -622,6 +678,10 @@ void WebUI::begin() {
     _server.on("/mpu/calibrate",    [this](){ handleMpuCalibrate(); });
     _server.on("/mpu/resetangles",  [this](){ handleMpuResetAngles(); });
     _server.on("/mpu/setangle",     [this](){ handleMpuSetAngle(); });
+    _server.on("/mpu/rollcal/start",  [this](){ handleMpuRollCalStart(); });
+    _server.on("/mpu/rollcal/finish", [this](){ handleMpuRollCalFinish(); });
+    _server.on("/mpu/rollcal/cancel", [this](){ handleMpuRollCalCancel(); });
+    _server.on("/mpu/rollaxis",       [this](){ handleMpuRollAxis(); });
     _server.on("/balance/start",    [this](){ handleBalanceStart(); });
     _server.on("/balance/stop",     [this](){ handleBalanceStop(); });
     _server.on("/balance/pid",      [this](){ handleBalancePid(); });
@@ -667,14 +727,21 @@ void WebUI::handleServoSetDefault() {
 
 void WebUI::handleMpu() {
     bool vert = fabsf(_mpu.angle) > 70.0f;
-    char buf[240];
+    char buf[420];
     snprintf(buf, sizeof(buf),
         "{\"ok\":%s,\"cal\":%s,\"angle\":%.2f,\"rate\":%.2f,"
-        "\"accelAngle\":%.2f,\"accelNorm\":%.3f,\"dropped\":%lu,\"vertical\":%s}",
+        "\"accelAngle\":%.2f,\"accelNorm\":%.3f,\"dropped\":%lu,\"vertical\":%s,"
+        "\"rollAxis\":\"%c\",\"rollSign\":%.0f,\"rollCal\":%s,"
+        "\"rollCalSamples\":%lu,\"rollCalSpan\":%.2f,\"rollCalQuality\":%.2f}",
         _mpu.ok ? "true" : "false",
         _mpu.calibrating ? "true" : "false",
         _mpu.angle, _mpu.rateDps, _mpu.accelAngle, _mpu.accelNormG,
-        (unsigned long)_mpu.droppedReads, vert ? "true" : "false");
+        (unsigned long)_mpu.droppedReads, vert ? "true" : "false",
+        _mpu.rollAxis == MPUSensor::ROLL_AXIS_Y ? 'Y' : 'X',
+        _mpu.rollSign,
+        _mpu.rollCalibrating ? "true" : "false",
+        (unsigned long)_mpu.rollCalSamples,
+        _mpu.rollCalSpanDeg, _mpu.rollCalQuality);
     _server.send(200, "application/json", buf);
 }
 
@@ -698,6 +765,56 @@ void WebUI::handleMpuSetAngle() {
     _mpu.setAngle(_server.arg("angle").toFloat(), _prefs);
     char buf[60];
     snprintf(buf, sizeof(buf), "{\"done\":true,\"angle\":%.2f}", _mpu.angle);
+    _server.send(200, "application/json", buf);
+}
+
+void WebUI::handleMpuRollCalStart() {
+    if (!_mpu.ok) { _server.send(503, "text/plain", "MPU not found"); return; }
+    _pid.stop();
+    _mpu.startRollCalibration();
+    _server.send(200, "application/json", "{\"done\":true,\"rollCal\":true}");
+}
+
+void WebUI::handleMpuRollCalFinish() {
+    if (!_mpu.ok) { _server.send(503, "text/plain", "MPU not found"); return; }
+    bool applied = _mpu.finishRollCalibration(_prefs);
+    char buf[180];
+    snprintf(buf, sizeof(buf),
+        "{\"done\":true,\"applied\":%s,\"axis\":\"%c\",\"sign\":%.0f,"
+        "\"samples\":%lu,\"span\":%.2f,\"quality\":%.2f}",
+        applied ? "true" : "false",
+        _mpu.rollAxis == MPUSensor::ROLL_AXIS_Y ? 'Y' : 'X',
+        _mpu.rollSign,
+        (unsigned long)_mpu.rollCalSamples,
+        _mpu.rollCalSpanDeg, _mpu.rollCalQuality);
+    _server.send(200, "application/json", buf);
+}
+
+void WebUI::handleMpuRollCalCancel() {
+    _mpu.cancelRollCalibration();
+    _server.send(200, "application/json", "{\"done\":true,\"rollCal\":false}");
+}
+
+void WebUI::handleMpuRollAxis() {
+    uint8_t axis = _mpu.rollAxis;
+    float sign = _mpu.rollSign;
+
+    if (_server.hasArg("axis")) {
+        String v = _server.arg("axis");
+        if (v.equalsIgnoreCase("y") || v == "1") axis = MPUSensor::ROLL_AXIS_Y;
+        if (v.equalsIgnoreCase("x") || v == "0") axis = MPUSensor::ROLL_AXIS_X;
+    }
+    if (_server.hasArg("sign")) {
+        sign = _server.arg("sign").toFloat() < 0.0f ? -1.0f : 1.0f;
+    }
+
+    _pid.stop();
+    _mpu.setRollAxis(axis, sign, _prefs);
+
+    char buf[80];
+    snprintf(buf, sizeof(buf), "{\"done\":true,\"axis\":\"%c\",\"sign\":%.0f}",
+        _mpu.rollAxis == MPUSensor::ROLL_AXIS_Y ? 'Y' : 'X',
+        _mpu.rollSign);
     _server.send(200, "application/json", buf);
 }
 
@@ -727,15 +844,19 @@ void WebUI::handleBalancePid() {
 
 void WebUI::handleBalanceState() {
     float sp = _pid.setpointAccum + _pid.trim;
-    char buf[360];
+    char buf[460];
     snprintf(buf, sizeof(buf),
         "{\"running\":%s,\"error\":%.2f,\"output\":%.1f,\"spAccum\":%.2f,\"servoPos\":%d"
         ",\"kp\":%.4f,\"ki\":%.4f,\"kd\":%.4f,\"setpoint\":%.4f"
-        ",\"angle\":%.2f,\"rate\":%.2f,\"accelAngle\":%.2f,\"accelNorm\":%.3f,\"dropped\":%lu}",
+        ",\"angle\":%.2f,\"rate\":%.2f,\"accelAngle\":%.2f,\"accelNorm\":%.3f,\"dropped\":%lu"
+        ",\"rollAxis\":\"%c\",\"rollSign\":%.0f,\"rollCal\":%s}",
         _pid.running ? "true" : "false",
         sp - _mpu.angle, _pid.output, _pid.setpointAccum, _servo.targetPos,
         _pid.kp, _pid.ki, _pid.kd, _pid.trim,
         _mpu.angle, _mpu.rateDps, _mpu.accelAngle, _mpu.accelNormG,
-        (unsigned long)_mpu.droppedReads);
+        (unsigned long)_mpu.droppedReads,
+        _mpu.rollAxis == MPUSensor::ROLL_AXIS_Y ? 'Y' : 'X',
+        _mpu.rollSign,
+        _mpu.rollCalibrating ? "true" : "false");
     _server.send(200, "application/json", buf);
 }

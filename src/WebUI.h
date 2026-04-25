@@ -31,6 +31,10 @@ private:
     void handleMpuCalibrate();
     void handleMpuResetAngles();
     void handleMpuSetAngle();
+    void handleMpuRollCalStart();
+    void handleMpuRollCalFinish();
+    void handleMpuRollCalCancel();
+    void handleMpuRollAxis();
     void handleBalanceStart();
     void handleBalanceStop();
     void handleBalancePid();
